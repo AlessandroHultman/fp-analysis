@@ -4,18 +4,16 @@
 # that can be generated as LLVM IR
 # Assuming the script is run from any directory and takes the root directory as an argument
 
-# Import the required modules
 import os
 import shutil
 import subprocess
 import argparse
-import csv
 import multiprocessing
-import logging
+from pathlib import Path
 
 
 # Define a function to run the analysis pass on a single file
-def run_pass(file_path):
+def run_pass(dir, output_file, file_path, csv_folder):
     # Get the file name and extension
     file_name = os.path.basename(file_path)
     file_ext = os.path.splitext(file_name)[1]
@@ -64,11 +62,25 @@ def run_pass(file_path):
         ]
     )
 
-    os.remove(os.path.splitext(file_name)[0] + ".ll")
-    print(csv_folder)
-    # logging.basicConfig(level=logging.DEBUG, filename="debug.log", filemode="w")
-    # logging.debug(os.path.join(csv_folder, os.path.splitext(file_name)[0] + ".csv"))
-    # shutil.move(os.path.splitext(file_name)[0] + ".csv", os.path.join(csv_folder, os.path.splitext(file_name)[0] + ".csv"))
+    file_name = file_name.strip()               # remove any whitespace
+    base_name = os.path.splitext(file_name)[0]  # get the base name without extension
+
+    os.remove(base_name + ".ll")                # remove the .ll file
+
+    dir = os.path.expanduser(dir)               # expand the tilde to the full home directory path
+    file_name = os.path.join(dir, file_name)    # get the full path to the file
+    base_name = os.path.splitext(file_name)[0]  # get the base name without extension
+
+    # Open the destination file for appending
+    with open(base_name + ".csv", "r") as src ,open(output_file, "a") as dst:
+        # Copy the contents of each file to results.csv
+        shutil.copyfileobj(src, dst)
+
+    csv_folder = os.path.join(
+        dir, "file-results"
+    )                                           # get the correct path to the file-results directory
+    csv_folder = Path(csv_folder)               # create a path object for the folder
+    shutil.move(base_name + ".csv", csv_folder) # move .csv to file-results folder
 
 
 # Check if the module is being run as the main program or not
@@ -77,9 +89,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run the floating-point analysis pass on source code files"
     )
-    parser.add_argument(
-        "--dir", help="the root directory for the analysis"
-    )
+    parser.add_argument("--dir", help="the root directory for the analysis")
     parser.add_argument(
         "--langs", nargs="*", help="the programming languages to analyze"
     )
@@ -87,6 +97,7 @@ if __name__ == "__main__":
 
     # Get the root directory and check if it exists
     root_dir = args.dir
+    root_dir = os.path.expanduser(root_dir)
     if not os.path.isdir(root_dir):
         print(f"{root_dir} is not a valid directory.")
         exit(1)
@@ -107,7 +118,15 @@ if __name__ == "__main__":
         # Run the analysis on all supported languages
         for root, dirs, files in os.walk(root_dir):
             for name in files:
-                pool.apply_async(run_pass, (os.path.join(root, name),))
+                pool.apply_async(
+                    run_pass,
+                    (
+                        root_dir,
+                        output_file,
+                        os.path.join(root, name),
+                        csv_folder,
+                    ),
+                )
         pool.close()
         pool.join()
 
@@ -143,7 +162,15 @@ if __name__ == "__main__":
             for root, dirs, files in os.walk(root_dir):
                 for name in files:
                     if os.path.splitext(name)[1] == "." + ext:
-                        pool.apply_async(run_pass, (os.path.join(root, name),))
+                        pool.apply_async(
+                            run_pass,
+                            (
+                                root_dir,
+                                output_file,
+                                os.path.join(root, name),
+                                csv_folder,
+                            ),
+                        )
 
         pool.close()
         pool.join()
