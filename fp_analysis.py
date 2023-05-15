@@ -10,6 +10,7 @@ import subprocess
 import argparse
 import multiprocessing
 from pathlib import Path
+from multiprocessing import Pool, Manager
 
 
 ext_to_folder = {
@@ -35,6 +36,8 @@ lang_to_ext = {
     "objective-c": ".m",
     "swift": ".swift",
 }
+
+lock = multiprocessing.Lock()
 
 
 # Run the compiler frontend corresponding to the language
@@ -83,6 +86,7 @@ def run_opt(file_name):
         ]
     )
 
+
 def handle_io(base_name, csv_folder, file_ext):
     with open(base_name + ".csv", "r") as src, open(
         os.path.join(csv_folder, f"{ext_to_folder[file_ext]}" + ".csv"), "a"
@@ -103,13 +107,23 @@ def run_pass(dir, file_path):
 
     run_opt(file_name)
     csv_folder = os.path.join(dir, ext_to_folder[file_ext])
-    if not os.path.exists(csv_folder):
-        os.mkdir(csv_folder)
+
+    # Acquire the lock before creating the directory
+    lock.acquire()
+    try:
+        if not os.path.exists(csv_folder):
+            try:
+                os.mkdir(csv_folder)
+            except FileExistsError:
+                # Directory might have been created by another process, so ignore the error
+                pass
+    finally:
+        # Release the lock after creating the directory
+        lock.release()
 
     # Remove the generated .ll file
     file_name = file_name.strip()
     base_name = os.path.splitext(file_name)[0]
-    print("remove")
     os.remove(base_name + ".ll")
 
     # If the pass is run on a Rust src file, .csv file gets created in current working directory
@@ -136,45 +150,51 @@ if __name__ == "__main__":
     root_dir = args.dir
     root_dir = os.path.expanduser(root_dir)
     if not os.path.isdir(root_dir):
-        print(f"{root_dir} is not a valid directory.")
-        exit(1)
+        parser.error(f"{root_dir} is not a valid directory.")
 
     langs = args.langs
 
+    if langs and not all(lang.lower() in lang_to_ext.keys() for lang in langs):
+        parser.error("One or more unsupported languages specified.")
+
     if not langs:
-        pool = multiprocessing.Pool()
-        # Run the analysis on all supported languages
-        for root, dirs, files in os.walk(root_dir):
-            for name in files:
-                file_path = os.path.join(root, name)
-                pool.apply(
-                    run_pass,
-                    (root_dir, file_path),
-                )
-        pool.close()
-        pool.join()
+        with Manager() as manager:
+            pool = Pool()
+            results = []
+            # Run the analysis on all supported languages
+            for root, dirs, files in os.walk(root_dir):
+                for name in files:
+                    file_path = os.path.join(root, name)
+                    result = pool.apply_async(run_pass, (root_dir, file_path))
+                    results.append(result)
+            pool.close()
+            for result in results:
+                result.get()
+            pool.join()
 
     else:
-        # Run the analysis only on the specified languages using multiprocessing
-        pool = multiprocessing.Pool()
-        for lang in langs:
-            # Convert the language name to lower case and get the corresponding extension
-            lang = lang.lower()
-            if lang in lang_to_ext.keys():
-                ext = lang_to_ext[lang]
-                # Find all files with the matching extension and run the analysis on them using multiprocessing
-                for root, dirs, files in os.walk(root_dir):
-                    for name in files:
-                        file_path = os.path.join(root, name)
-                        if os.path.splitext(name)[1] == ext:
-                            pool.apply(
-                                run_pass,
-                                (root_dir, file_path),
-                            )
-            else:
-                print("Must enter supported language")
+        with Manager() as manager:
+            # Run the analysis only on the specified languages using multiprocessing
+            pool = Pool()
+            results = []
+            for lang in langs:
+                # Convert the language name to lower case and get the corresponding extension
+                lang = lang.lower()
+                if lang in lang_to_ext.keys():
+                    ext = lang_to_ext[lang]
+                    # Find all files with the matching extension and run the analysis on them using multiprocessing
+                    for root, dirs, files in os.walk(root_dir):
+                        for name in files:
+                            file_path = os.path.join(root, name)
+                            if os.path.splitext(name)[1] == ext:
+                                result = pool.apply_async(run_pass, (root_dir, file_path))
+                                results.append(result)
+                else:
+                    parser.error(f"{lang} is not a supported language.")
 
-        pool.close()
-        pool.join()
+            pool.close()
+            for result in results:
+                result.get()
+            pool.join()
 
-    print("Done.")
+    print(f"Done. Check {root_dir} for results.")
