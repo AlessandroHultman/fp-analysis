@@ -12,10 +12,33 @@ import multiprocessing
 from pathlib import Path
 
 
-def run_pass(dir, output_file, file_path, csv_folder):
-    file_name = os.path.basename(file_path)
-    file_ext = os.path.splitext(file_name)[1]
+ext_to_folder = {
+    ".c": "c-results",
+    ".cpp": "cpp-results",
+    ".rs": "rust-results",
+    ".hs": "haskell-results",
+    ".rb": "ruby-results",
+    ".java": "java-results",
+    ".scala": "scala-results",
+    ".m": "objective-c-results",
+    ".swift": "swift-results",
+}
 
+lang_to_ext = {
+    "c": ".c",
+    "cpp": ".cpp",
+    "rust": ".rs",
+    "haskell": ".hs",
+    "ruby": ".rb",
+    "java": ".java",
+    "scala": ".scala",
+    "objective-c": ".m",
+    "swift": ".swift",
+}
+
+
+# Run the compiler frontend corresponding to the language
+def run_frontend(file_ext, file_path, file_name):
     if file_ext == ".c":
         # Generate the LLVM IR file with clang
         subprocess.run(["clang", "-emit-llvm", "-S", file_path])
@@ -48,7 +71,9 @@ def run_pass(dir, output_file, file_path, csv_folder):
     else:
         return
 
-    # Run the analysis pass with opt and append the output to the output file
+
+# Run the analysis pass with opt
+def run_opt(file_name):
     subprocess.run(
         [
             "opt",
@@ -58,32 +83,44 @@ def run_pass(dir, output_file, file_path, csv_folder):
         ]
     )
 
+def handle_io(base_name, csv_folder, file_ext):
+    with open(base_name + ".csv", "r") as src, open(
+        os.path.join(csv_folder, f"{ext_to_folder[file_ext]}" + ".csv"), "a"
+    ) as dst:
+        shutil.copyfileobj(src, dst)
+        csv_folder = Path(csv_folder)
+        shutil.move(base_name + ".csv", csv_folder)
+
+
+def run_pass(dir, file_path):
+    file_name = os.path.basename(file_path)
+    file_ext = os.path.splitext(file_name)[1]
+
+    if file_ext in ext_to_folder.keys():
+        run_frontend(file_ext, file_path, file_name)
+    else:
+        return
+
+    run_opt(file_name)
+    csv_folder = os.path.join(dir, ext_to_folder[file_ext])
+    if not os.path.exists(csv_folder):
+        os.mkdir(csv_folder)
+
+    # Remove the generated .ll file
     file_name = file_name.strip()
     base_name = os.path.splitext(file_name)[0]
-
+    print("remove")
     os.remove(base_name + ".ll")
 
     # If the pass is run on a Rust src file, .csv file gets created in current working directory
     if file_ext == ".rs":
-        with open(base_name + ".csv", "r") as src, open(output_file, "a") as dst:
-            shutil.copyfileobj(src, dst)
+        handle_io(base_name, csv_folder, file_ext)
 
-        csv_folder = os.path.join(dir, "file-results")
-        csv_folder = Path(csv_folder)
-
-        shutil.move(base_name + ".csv", csv_folder)
     else:
         dir = os.path.expanduser(dir)
         file_name = os.path.join(dir, file_name)
         base_name = os.path.splitext(file_name)[0]
-
-        with open(base_name + ".csv", "r") as src, open(output_file, "a") as dst:
-            shutil.copyfileobj(src, dst)
-
-        csv_folder = os.path.join(dir, "file-results")
-        csv_folder = Path(csv_folder)
-
-        shutil.move(base_name + ".csv", csv_folder)
+        handle_io(base_name, csv_folder, file_ext)
 
 
 # Check if the module is being run as the main program or not
@@ -96,19 +133,11 @@ if __name__ == "__main__":
         "--langs", nargs="*", help="the programming languages to analyze"
     )
     args = parser.parse_args()
-
     root_dir = args.dir
     root_dir = os.path.expanduser(root_dir)
     if not os.path.isdir(root_dir):
         print(f"{root_dir} is not a valid directory.")
         exit(1)
-
-    # Create an empty output file in the root directory
-    output_file = os.path.join(root_dir, "results.csv")
-
-    # Create a folder for the csv files in the root directory
-    csv_folder = os.path.join(root_dir, "file-results")
-    os.makedirs(csv_folder, exist_ok=True)
 
     langs = args.langs
 
@@ -117,14 +146,10 @@ if __name__ == "__main__":
         # Run the analysis on all supported languages
         for root, dirs, files in os.walk(root_dir):
             for name in files:
-                pool.apply_async(
+                file_path = os.path.join(root, name)
+                pool.apply(
                     run_pass,
-                    (
-                        root_dir,
-                        output_file,
-                        os.path.join(root, name),
-                        csv_folder,
-                    ),
+                    (root_dir, file_path),
                 )
         pool.close()
         pool.join()
@@ -135,42 +160,21 @@ if __name__ == "__main__":
         for lang in langs:
             # Convert the language name to lower case and get the corresponding extension
             lang = lang.lower()
-            if lang == "c":
-                ext = "c"
-            elif lang == "c++":
-                ext = "cpp"
-            elif lang == "haskell":
-                ext = "hs"
-            elif lang == "rust":
-                ext = "rs"
-            elif lang == "java":
-                ext = "java"
-            elif lang == "swift":
-                ext = "swift"
-            elif lang == "scala":
-                ext = "scala"
-            elif lang == "objective-c":
-                ext = "m"
-            elif lang == "ruby":
-                ext = "rb"
+            if lang in lang_to_ext.keys():
+                ext = lang_to_ext[lang]
+                # Find all files with the matching extension and run the analysis on them using multiprocessing
+                for root, dirs, files in os.walk(root_dir):
+                    for name in files:
+                        file_path = os.path.join(root, name)
+                        if os.path.splitext(name)[1] == ext:
+                            pool.apply(
+                                run_pass,
+                                (root_dir, file_path),
+                            )
             else:
-                continue
-
-            # Find all files with the matching extension and run the analysis on them using multiprocessing
-            for root, dirs, files in os.walk(root_dir):
-                for name in files:
-                    if os.path.splitext(name)[1] == "." + ext:
-                        pool.apply_async(
-                            run_pass,
-                            (
-                                root_dir,
-                                output_file,
-                                os.path.join(root, name),
-                                csv_folder,
-                            ),
-                        )
+                print("Must enter supported language")
 
         pool.close()
         pool.join()
 
-    print(f"Done. Check {output_file} and {csv_folder}.")
+    print("Done.")
