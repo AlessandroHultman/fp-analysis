@@ -12,13 +12,10 @@ import multiprocessing
 from pathlib import Path
 
 
-# Define a function to run the analysis pass on a single file
 def run_pass(dir, output_file, file_path, csv_folder):
-    # Get the file name and extension
     file_name = os.path.basename(file_path)
     file_ext = os.path.splitext(file_name)[1]
 
-    # Check if the file extension is one of the supported languages
     if file_ext == ".c":
         # Generate the LLVM IR file with clang
         subprocess.run(["clang", "-emit-llvm", "-S", file_path])
@@ -49,7 +46,6 @@ def run_pass(dir, output_file, file_path, csv_folder):
         # Generate the LLVM IR file with ruby-llvm
         subprocess.run(["ruby-llvm", "--emit-llvm", file_path])
     else:
-        # Skip other file extensions
         return
 
     # Run the analysis pass with opt and append the output to the output file
@@ -62,30 +58,36 @@ def run_pass(dir, output_file, file_path, csv_folder):
         ]
     )
 
-    file_name = file_name.strip()               # remove any whitespace
-    base_name = os.path.splitext(file_name)[0]  # get the base name without extension
+    file_name = file_name.strip()
+    base_name = os.path.splitext(file_name)[0]
 
-    os.remove(base_name + ".ll")                # remove the .ll file
+    os.remove(base_name + ".ll")
 
-    dir = os.path.expanduser(dir)               # expand the tilde to the full home directory path
-    file_name = os.path.join(dir, file_name)    # get the full path to the file
-    base_name = os.path.splitext(file_name)[0]  # get the base name without extension
+    # If the pass is run on a Rust src file, .csv file gets created in current working directory
+    if file_ext == ".rs":
+        with open(base_name + ".csv", "r") as src, open(output_file, "a") as dst:
+            shutil.copyfileobj(src, dst)
 
-    # Open the destination file for appending
-    with open(base_name + ".csv", "r") as src ,open(output_file, "a") as dst:
-        # Copy the contents of each file to results.csv
-        shutil.copyfileobj(src, dst)
+        csv_folder = os.path.join(dir, "file-results")
+        csv_folder = Path(csv_folder)
 
-    csv_folder = os.path.join(
-        dir, "file-results"
-    )                                           # get the correct path to the file-results directory
-    csv_folder = Path(csv_folder)               # create a path object for the folder
-    shutil.move(base_name + ".csv", csv_folder) # move .csv to file-results folder
+        shutil.move(base_name + ".csv", csv_folder)
+    else:
+        dir = os.path.expanduser(dir)
+        file_name = os.path.join(dir, file_name)
+        base_name = os.path.splitext(file_name)[0]
+
+        with open(base_name + ".csv", "r") as src, open(output_file, "a") as dst:
+            shutil.copyfileobj(src, dst)
+
+        csv_folder = os.path.join(dir, "file-results")
+        csv_folder = Path(csv_folder)
+
+        shutil.move(base_name + ".csv", csv_folder)
 
 
 # Check if the module is being run as the main program or not
 if __name__ == "__main__":
-    # Parse and validate command line arguments
     parser = argparse.ArgumentParser(
         description="Run the floating-point analysis pass on source code files"
     )
@@ -95,7 +97,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Get the root directory and check if it exists
     root_dir = args.dir
     root_dir = os.path.expanduser(root_dir)
     if not os.path.isdir(root_dir):
@@ -109,10 +110,8 @@ if __name__ == "__main__":
     csv_folder = os.path.join(root_dir, "file-results")
     os.makedirs(csv_folder, exist_ok=True)
 
-    # Get the list of programming languages to analyze from command line arguments
     langs = args.langs
 
-    # Check if the list of programming languages to analyze is empty or not
     if not langs:
         pool = multiprocessing.Pool()
         # Run the analysis on all supported languages
@@ -155,7 +154,6 @@ if __name__ == "__main__":
             elif lang == "ruby":
                 ext = "rb"
             else:
-                # Skip other languages
                 continue
 
             # Find all files with the matching extension and run the analysis on them using multiprocessing
