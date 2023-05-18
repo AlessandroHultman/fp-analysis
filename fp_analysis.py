@@ -115,7 +115,7 @@ def run_pass(dir, file_path):
             try:
                 os.mkdir(csv_folder)
             except FileExistsError:
-                # Directory might have been created by another process, so ignore the error
+                # Directory might have been created by another process, so the exception will not be handled
                 pass
     finally:
         # Release the lock after creating the directory
